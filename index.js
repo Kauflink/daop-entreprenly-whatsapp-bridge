@@ -28,6 +28,8 @@ const BUSINESS_NAME = process.env.BUSINESS_NAME || 'Mi Negocio';
 const PORT = Number(process.env.PORT || 3001);
 /** Optional path to an installed Chrome/Edge to avoid Chromium launch issues on Windows. */
 const BROWSER_PATH = process.env.WHATSAPP_BROWSER_PATH || undefined;
+/** Seller account email (login) whose catalog the bot answers with. */
+const OWNER_EMAIL = process.env.OWNER_EMAIL || '';
 
 /** Latest pairing QR (raw string) and current link state, shared with the web page. */
 const state = { qr: null, connected: false, phone: null };
@@ -91,6 +93,7 @@ client.on('ready', async () => {
     phone: state.phone,
     businessName: BUSINESS_NAME,
     sellerId: SELLER_ID,
+    ownerEmail: OWNER_EMAIL,
   });
 });
 
@@ -105,6 +108,7 @@ client.on('disconnected', async (reason) => {
     phone: state.phone,
     businessName: BUSINESS_NAME,
     sellerId: SELLER_ID,
+    ownerEmail: OWNER_EMAIL,
   });
 });
 
@@ -128,6 +132,7 @@ client.on('message', async (msg) => {
     fromPhone,
     clientName,
     content: msg.body,
+    ownerEmail: OWNER_EMAIL,
   });
 
   if (reply && reply.content) {
