@@ -115,9 +115,28 @@ client.on('disconnected', async (reason) => {
 client.on('message', async (msg) => {
   // Ignore own messages, status broadcasts and group chats.
   if (msg.fromMe || msg.from === 'status@broadcast' || msg.from.endsWith('@g.us')) return;
-  if (!msg.body || !msg.body.trim()) return;
 
   const fromPhone = toPhone(msg.from);
+
+  // Payment receipt: an image/document is forwarded to the receipt endpoint.
+  if (msg.hasMedia && (msg.type === 'image' || msg.type === 'document')) {
+    try {
+      const media = await msg.downloadMedia();
+      if (media && media.data) {
+        const image = `data:${media.mimetype};base64,${media.data}`;
+        console.log(`[whatsapp] Comprobante recibido de ${fromPhone}`);
+        const reply = await callBackend('/chatbot/whatsapp/webhook/receipt',
+          { fromPhone, ownerEmail: OWNER_EMAIL, image });
+        if (reply && reply.content) await client.sendMessage(msg.from, reply.content);
+      }
+    } catch (err) {
+      console.warn('[whatsapp] No se pudo procesar el comprobante:', err.message);
+    }
+    return;
+  }
+
+  if (!msg.body || !msg.body.trim()) return;
+
   let clientName = fromPhone;
   try {
     const contact = await msg.getContact();
