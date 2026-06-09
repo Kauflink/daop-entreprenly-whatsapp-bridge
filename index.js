@@ -26,6 +26,8 @@ const BRIDGE_TOKEN = process.env.BRIDGE_TOKEN || 'entreprenly-bridge-secret';
 const SELLER_ID = Number(process.env.SELLER_ID || 1);
 const BUSINESS_NAME = process.env.BUSINESS_NAME || 'Mi Negocio';
 const PORT = Number(process.env.PORT || 3001);
+/** Optional path to an installed Chrome/Edge to avoid Chromium launch issues on Windows. */
+const BROWSER_PATH = process.env.WHATSAPP_BROWSER_PATH || undefined;
 
 /** Latest pairing QR (raw string) and current link state, shared with the web page. */
 const state = { qr: null, connected: false, phone: null };
@@ -57,7 +59,26 @@ function toPhone(jid) {
 
 const client = new Client({
   authStrategy: new LocalAuth({ clientId: 'entreprenly' }),
-  puppeteer: { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] },
+  // Pin a known WhatsApp Web build so device linking stays compatible even if the
+  // bundled version drifts. Overridable via WHATSAPP_WEB_VERSION.
+  webVersionCache: {
+    type: 'remote',
+    remotePath:
+      'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/' +
+      (process.env.WHATSAPP_WEB_VERSION || '2.3000.1041063798-alpha') +
+      '.html',
+  },
+  puppeteer: {
+    headless: true,
+    executablePath: BROWSER_PATH,
+    timeout: 60000,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
+    ],
+  },
 });
 
 client.on('qr', async (qr) => {
