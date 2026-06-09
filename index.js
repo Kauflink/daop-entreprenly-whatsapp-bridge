@@ -59,15 +59,6 @@ function toPhone(jid) {
 
 const client = new Client({
   authStrategy: new LocalAuth({ clientId: 'entreprenly' }),
-  // Pin a known WhatsApp Web build so device linking stays compatible even if the
-  // bundled version drifts. Overridable via WHATSAPP_WEB_VERSION.
-  webVersionCache: {
-    type: 'remote',
-    remotePath:
-      'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/' +
-      (process.env.WHATSAPP_WEB_VERSION || '2.3000.1041063798-alpha') +
-      '.html',
-  },
   puppeteer: {
     headless: true,
     executablePath: BROWSER_PATH,
