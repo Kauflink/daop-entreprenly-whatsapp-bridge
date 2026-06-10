@@ -166,8 +166,39 @@ client.on('message', async (msg) => {
 
 // --- Local web page to scan the QR comfortably from the screen ---
 const app = express();
+app.use(express.json({ limit: '5mb' }));
 
 app.get('/health', (_req, res) => res.json({ connected: state.connected, phone: state.phone }));
+
+/**
+ * Outbound relay: lets the backend push a message to a client through WhatsApp
+ * (e.g. "payment approved"), beyond the automatic reply to an inbound message.
+ * Guarded by the shared bridge token.
+ */
+app.post('/send', async (req, res) => {
+  if ((req.get('X-Bridge-Token') || '') !== BRIDGE_TOKEN) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const { phone, content } = req.body || {};
+  if (!phone || !content) {
+    return res.status(400).json({ error: 'phone and content are required' });
+  }
+  if (!state.connected) {
+    return res.status(409).json({ error: 'whatsapp not connected' });
+  }
+  const digits = String(phone).replace(/\D/g, '');
+  if (!digits) {
+    return res.status(400).json({ error: 'invalid phone' });
+  }
+  try {
+    await client.sendMessage(`${digits}@c.us`, String(content));
+    console.log(`[bridge] Mensaje saliente enviado a +${digits}: ${content}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.warn(`[bridge] No se pudo enviar a +${digits}: ${err.message}`);
+    res.status(502).json({ error: err.message });
+  }
+});
 
 app.get('/', async (_req, res) => {
   if (state.connected) {
