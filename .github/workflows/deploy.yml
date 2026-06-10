@@ -1,0 +1,61 @@
+name: Deploy WhatsApp bridge to Compute Engine
+
+# Builds the bridge Docker image, pushes it to Artifact Registry and rolls it out on
+# the shared Compute Engine VM via docker compose. Triggered on every push to main.
+# Shares the VM (/opt/entreprenly) and the gh-deployer service account with the backend.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Build image
+        run: docker build -t "${{ vars.AR_IMAGE }}:${{ github.sha }}" -t "${{ vars.AR_IMAGE }}:latest" .
+
+      - name: Push image
+        run: |
+          docker push "${{ vars.AR_IMAGE }}:${{ github.sha }}"
+          docker push "${{ vars.AR_IMAGE }}:latest"
+
+      - name: Roll out on the VM
+        run: |
+          TOKEN="$(gcloud auth print-access-token)"
+          for attempt in 1 2 3 4 5; do
+            if gcloud compute ssh "${{ vars.GCE_INSTANCE }}" \
+              --zone "${{ vars.GCP_ZONE }}" \
+              --project "${{ vars.GCP_PROJECT_ID }}" \
+              --strict-host-key-checking=no \
+              --quiet \
+              --command "echo $TOKEN | sudo docker login -u oauth2accesstoken --password-stdin ${{ vars.GCP_REGION }}-docker.pkg.dev && cd /opt/entreprenly && sudo docker compose pull whatsapp-bridge && sudo docker compose up -d whatsapp-bridge && sudo docker image prune -f"; then
+              echo "Roll out succeeded on attempt $attempt"
+              exit 0
+            fi
+            echo "SSH attempt $attempt failed (likely key propagation); retrying in 15s..."
+            sleep 15
+          done
+          echo "All SSH attempts failed" >&2
+          exit 1
