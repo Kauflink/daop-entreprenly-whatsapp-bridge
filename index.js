@@ -17,6 +17,8 @@
  */
 
 require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 const qrcode = require('qrcode');
 const qrcodeTerminal = require('qrcode-terminal');
@@ -38,7 +40,30 @@ const initializing = new Set(); // guard against duplicate init
 // with "No LID for user". We remember the exact chatId the client wrote from and
 // reuse it, which is always available for the payment flow (the client messages
 // first to send the receipt before the seller approves).
+//
+// The map is persisted to the auth volume so it survives bridge restarts: a
+// confirmation approved after a restart still reaches the client.
 const chatIdByPhone = new Map();
+const CHATID_MAP_FILE = path.join(__dirname, '.wwebjs_auth', 'chatid-map.json');
+
+function loadChatIdMap() {
+  try {
+    const obj = JSON.parse(fs.readFileSync(CHATID_MAP_FILE, 'utf8'));
+    for (const [phone, chatId] of Object.entries(obj)) chatIdByPhone.set(phone, chatId);
+    console.log(`[bridge] Mapa de chatIds cargado (${chatIdByPhone.size} entradas)`);
+  } catch { /* no map persisted yet */ }
+}
+
+function rememberChatId(phone, chatId) {
+  if (!phone || !chatId || chatIdByPhone.get(phone) === chatId) return;
+  chatIdByPhone.set(phone, chatId);
+  try {
+    fs.mkdirSync(path.dirname(CHATID_MAP_FILE), { recursive: true });
+    fs.writeFileSync(CHATID_MAP_FILE, JSON.stringify(Object.fromEntries(chatIdByPhone)));
+  } catch (err) {
+    console.warn(`[bridge] No se pudo guardar el mapa de chatIds: ${err.message}`);
+  }
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -140,7 +165,7 @@ async function initSession(email, sellerId = 1, businessName = 'Mi Negocio') {
     const fromPhone = toPhone(msg.from);
     // Remember the exact chatId so a later /send reaches this client even when
     // WhatsApp addresses them by LID rather than by their phone number.
-    if (fromPhone) chatIdByPhone.set(fromPhone, msg.from);
+    rememberChatId(fromPhone, msg.from);
 
     // Payment receipt image.
     if (msg.hasMedia && (msg.type === 'image' || msg.type === 'document')) {
@@ -301,6 +326,8 @@ app.listen(PORT, () => {
   console.log(`[bridge] Multi-tenant bridge escuchando en puerto ${PORT}`);
   console.log(`[bridge] Backend: ${BACKEND_URL}`);
   console.log(`[bridge] Página de estado: http://localhost:${PORT}`);
+
+  loadChatIdMap();
 
   // Auto-start the session for the owner configured in .env (if provided).
   const autoEmail      = process.env.OWNER_EMAIL;
