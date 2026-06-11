@@ -32,6 +32,14 @@ const BROWSER_PATH = process.env.WHATSAPP_BROWSER_PATH || undefined;
 const sessions    = new Map();
 const initializing = new Set(); // guard against duplicate init
 
+// phone (+digits) → the real WhatsApp chatId seen on an inbound message.
+// WhatsApp now addresses some users by LID (e.g. "250061904675033@lid") instead
+// of their phone, so reconstructing "<digits>@c.us" for an outbound /send fails
+// with "No LID for user". We remember the exact chatId the client wrote from and
+// reuse it, which is always available for the payment flow (the client messages
+// first to send the receipt before the seller approves).
+const chatIdByPhone = new Map();
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function toPhone(jid) {
@@ -130,6 +138,9 @@ async function initSession(email, sellerId = 1, businessName = 'Mi Negocio') {
     if (msg.fromMe || msg.from === 'status@broadcast' || msg.from.endsWith('@g.us')) return;
 
     const fromPhone = toPhone(msg.from);
+    // Remember the exact chatId so a later /send reaches this client even when
+    // WhatsApp addresses them by LID rather than by their phone number.
+    if (fromPhone) chatIdByPhone.set(fromPhone, msg.from);
 
     // Payment receipt image.
     if (msg.hasMedia && (msg.type === 'image' || msg.type === 'document')) {
@@ -236,12 +247,26 @@ app.post('/send', async (req, res) => {
   const digits = String(phone).replace(/\D/g, '');
   if (!digits) return res.status(400).json({ error: 'teléfono inválido' });
 
+  // Resolve the chatId to send to, in order of reliability:
+  //   1. the exact chatId the client wrote from (handles LID-addressed users),
+  //   2. WhatsApp's own number→id resolution,
+  //   3. the classic "<digits>@c.us" fallback.
+  let chatId = chatIdByPhone.get(`+${digits}`);
+  if (!chatId) {
+    try {
+      const numberId = await session.client.getNumberId(digits);
+      chatId = numberId ? numberId._serialized : `${digits}@c.us`;
+    } catch {
+      chatId = `${digits}@c.us`;
+    }
+  }
+
   try {
-    await session.client.sendMessage(`${digits}@c.us`, String(content));
-    console.log(`[bridge:${email}] Mensaje enviado a +${digits}`);
+    await session.client.sendMessage(chatId, String(content));
+    console.log(`[bridge:${email}] Mensaje enviado a +${digits} (${chatId})`);
     res.json({ ok: true });
   } catch (err) {
-    console.warn(`[bridge:${email}] No se pudo enviar a +${digits}:`, err.message);
+    console.warn(`[bridge:${email}] No se pudo enviar a +${digits} (${chatId}):`, err.message);
     res.status(502).json({ error: err.message });
   }
 });
@@ -276,4 +301,14 @@ app.listen(PORT, () => {
   console.log(`[bridge] Multi-tenant bridge escuchando en puerto ${PORT}`);
   console.log(`[bridge] Backend: ${BACKEND_URL}`);
   console.log(`[bridge] Página de estado: http://localhost:${PORT}`);
+
+  // Auto-start the session for the owner configured in .env (if provided).
+  const autoEmail      = process.env.OWNER_EMAIL;
+  const autoSellerId   = Number(process.env.SELLER_ID)   || 1;
+  const autoBusinessName = process.env.BUSINESS_NAME    || 'Mi Negocio';
+  if (autoEmail) {
+    console.log(`[bridge] Auto-iniciando sesión para ${autoEmail} …`);
+    initSession(autoEmail, autoSellerId, autoBusinessName)
+      .catch(err => console.error(`[bridge] Auto-inicio fallido:`, err));
+  }
 });
