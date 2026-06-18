@@ -253,7 +253,31 @@ app.get('/qr', async (req, res) => {
 });
 
 /**
- * Send a message through a seller's WhatsApp.
+ * Disconnect and destroy a seller's WhatsApp session.
+ * Called by the backend when the seller clicks "Disconnect".
+ * Protected by X-Bridge-Token header.
+ */
+app.post('/disconnect', async (req, res) => {
+  if ((req.get('X-Bridge-Token') || '') !== BRIDGE_TOKEN)
+    return res.status(403).json({ error: 'forbidden' });
+
+  const { email } = req.query;
+  if (!email) return res.status(400).json({ error: 'email es requerido' });
+
+  const session = sessions.get(email);
+  if (!session) return res.json({ ok: true });
+
+  try {
+    await session.client.logout();
+  } catch (err) {
+    console.warn(`[bridge:${email}] Error al desconectar:`, err.message);
+  }
+  sessions.delete(email);
+  console.log(`[bridge] Sesión de ${email} desconectada manualmente`);
+  res.json({ ok: true });
+});
+
+/** Send a message through a seller's WhatsApp.
  * Called by the backend when a payment is approved etc.
  * Protected by X-Bridge-Token header.
  */
