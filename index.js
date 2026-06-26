@@ -22,8 +22,20 @@ const qrcode = require('qrcode');
 const qrcodeTerminal = require('qrcode-terminal');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 
-const BACKEND_URL  = (process.env.BACKEND_URL  || 'http://localhost:8092/api/v1').replace(/\/$/, '');
+// Two backends share one WhatsApp session via a manual "turn": only the active
+// backend receives and answers incoming messages at any given time. The turn is
+// changed from the /switch page.
+const BACKENDS = {
+  daop: (process.env.BACKEND_URL_DAOP || 'https://daop-api.entreprenly.online/api/v1').replace(/\/$/, ''),
+  ap:   (process.env.BACKEND_URL_AP   || 'https://ap-api.entreprenly.online/api/v1').replace(/\/$/, ''),
+};
+let activeBackend = (process.env.DEFAULT_BACKEND || 'daop').toLowerCase();
+if (!BACKENDS[activeBackend]) activeBackend = 'daop';
+const backendUrl = () => BACKENDS[activeBackend];
+
 const BRIDGE_TOKEN = process.env.BRIDGE_TOKEN  || 'entreprenly-bridge-secret';
+// Guards the /switch page; defaults to the bridge token when not set separately.
+const SWITCH_TOKEN = process.env.SWITCH_TOKEN  || BRIDGE_TOKEN;
 const PORT         = Number(process.env.PORT   || 3001);
 const BROWSER_PATH = process.env.WHATSAPP_BROWSER_PATH || undefined;
 
@@ -41,7 +53,7 @@ function toPhone(jid) {
 
 async function callBackend(path, body) {
   try {
-    const res = await fetch(`${BACKEND_URL}${path}`, {
+    const res = await fetch(`${backendUrl()}${path}`, {
       method : 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Bridge-Token': BRIDGE_TOKEN },
       body   : JSON.stringify(body),
@@ -246,6 +258,69 @@ app.post('/send', async (req, res) => {
   }
 });
 
+/**
+ * Turn-switch page: pick which backend receives WhatsApp messages.
+ * Open it as /switch?key=<SWITCH_TOKEN>; the buttons reuse that key.
+ */
+app.get('/switch', (req, res) => {
+  const key = String(req.query.key || '');
+  const button = (id, label) => {
+    const isActive = activeBackend === id;
+    return `<button class="opt${isActive ? ' active' : ''}" ${isActive ? 'disabled' : `onclick="sw('${id}')"`}>
+      ${isActive ? '✅ ' : ''}${label}${isActive ? ' — activo' : ''}</button>`;
+  };
+  res.send(`<!doctype html><html lang="es"><head>
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Turno de WhatsApp — Entreprenly</title>
+    <style>
+      body{font-family:system-ui;background:#0f172a;color:#e2e8f0;margin:0;min-height:100vh;
+        display:flex;align-items:center;justify-content:center}
+      .box{background:#1e293b;padding:2rem;border-radius:16px;width:340px;text-align:center;
+        box-shadow:0 10px 30px rgba(0,0,0,.4)}
+      h1{font-size:1.2rem;margin:0 0 .25rem}
+      p{color:#94a3b8;font-size:.9rem;margin:.25rem 0 1.5rem}
+      .opt{display:block;width:100%;padding:1rem;margin:.5rem 0;border:0;border-radius:10px;
+        font-size:1rem;cursor:pointer;background:#334155;color:#e2e8f0}
+      .opt.active{background:#16a34a;color:#fff;cursor:default}
+      .opt:not(.active):hover{background:#475569}
+      .msg{font-size:.8rem;color:#94a3b8;margin-top:1rem;min-height:1rem}
+    </style></head><body>
+    <div class="box">
+      <h1>📲 Turno de WhatsApp</h1>
+      <p>El backend activo recibe y responde los mensajes.</p>
+      ${button('daop', 'DAOP (Java)')}
+      ${button('ap', 'AP (.NET)')}
+      <div class="msg" id="msg"></div>
+    </div>
+    <script>
+      const key = ${JSON.stringify(key)};
+      async function sw(to){
+        const m = document.getElementById('msg'); m.textContent = 'Cambiando…';
+        try{
+          const r = await fetch('/switch', { method:'POST',
+            headers:{ 'Content-Type':'application/json' },
+            body: JSON.stringify({ to, key }) });
+          const d = await r.json();
+          if (r.ok) location.href = '/switch?key=' + encodeURIComponent(key);
+          else m.textContent = d.error || 'Error';
+        } catch { m.textContent = 'Error de red'; }
+      }
+    </script></body></html>`);
+});
+
+/** Apply a turn switch. Protected by SWITCH_TOKEN (body.key or X-Bridge-Token). */
+app.post('/switch', (req, res) => {
+  const key = (req.body && req.body.key) || req.get('X-Bridge-Token') || '';
+  if (key !== SWITCH_TOKEN) return res.status(403).json({ error: 'clave inválida' });
+
+  const target = String((req.body && req.body.to) || '').toLowerCase();
+  if (!BACKENDS[target]) return res.status(400).json({ error: 'backend desconocido' });
+
+  activeBackend = target;
+  console.log(`[bridge] Turno cambiado → ${activeBackend} (${backendUrl()})`);
+  res.json({ ok: true, active: activeBackend, url: backendUrl() });
+});
+
 /** Admin HTML status page. */
 app.get('/', async (_req, res) => {
   const rows = [...sessions.entries()].map(([email, { state }]) => {
@@ -274,6 +349,7 @@ app.get('/', async (_req, res) => {
 
 app.listen(PORT, () => {
   console.log(`[bridge] Multi-tenant bridge escuchando en puerto ${PORT}`);
-  console.log(`[bridge] Backend: ${BACKEND_URL}`);
-  console.log(`[bridge] Página de estado: http://localhost:${PORT}`);
+  console.log(`[bridge] Backends → DAOP: ${BACKENDS.daop} | AP: ${BACKENDS.ap}`);
+  console.log(`[bridge] Turno activo: ${activeBackend} (${backendUrl()})`);
+  console.log(`[bridge] Estado: http://localhost:${PORT}  ·  Cambiar turno: http://localhost:${PORT}/switch`);
 });
