@@ -22,4 +22,6 @@ COPY index.js .
 
 EXPOSE 3001
 
-CMD ["node", "index.js"]
+# Remove any stale Chromium singleton locks left by a previous container before
+# starting, so whatsapp-web.js can relaunch the browser with the persisted profile.
+CMD ["sh", "-c", "find /app/.wwebjs_auth -name 'Singleton*' -delete 2>/dev/null; node index.js"]
