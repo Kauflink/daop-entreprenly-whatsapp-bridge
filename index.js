@@ -318,6 +318,23 @@ app.post('/switch', (req, res) => {
 
   activeBackend = target;
   console.log(`[bridge] Turno cambiado → ${activeBackend} (${backendUrl()})`);
+
+  // Re-sync every already-connected session to the backend that just took the turn,
+  // so it knows which WhatsApp accounts are linked (the 'ready' event only fired for
+  // whichever backend was active at connection time).
+  for (const [email, s] of sessions.entries()) {
+    if (s.state.connected) {
+      callBackend('/chatbot/whatsapp/bridge/status', {
+        connected   : true,
+        phone       : s.state.phone,
+        businessName: s.businessName,
+        sellerId    : s.sellerId,
+        ownerEmail  : email,
+      });
+      console.log(`[bridge] Estado re-enviado a ${activeBackend}: ${email} (${s.state.phone})`);
+    }
+  }
+
   res.json({ ok: true, active: activeBackend, url: backendUrl() });
 });
 
